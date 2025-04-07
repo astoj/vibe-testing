@@ -1,0 +1,155 @@
+{
+  "users": {
+    "valid": {
+      "id": "user-001",
+      "name": "Test User",
+      "email": "testuser@example.com",
+      "password": "Password123!",
+      "role": "user"
+    },
+    "admin": {
+      "id": "admin-001",
+      "name": "Admin User",
+      "email": "admin@example.com",
+      "password": "AdminPass456!",
+      "role": "admin"
+    },
+    "locked": {
+      "id": "user-002",
+      "name": "Locked User",
+      "email": "locked@example.com",
+      "password": "LockedPass789!",
+      "status": "locked",
+      "lockedUntil": "2099-12-31T23:59:59Z"
+    },
+    "resetPassword": {
+      "id": "user-003",
+      "name": "Reset Password User",
+      "email": "reset@example.com",
+      "password": "OldPassword123!",
+      "resetToken": "valid-token",
+      "resetTokenExpiry": "2099-12-31T23:59:59Z"
+    },
+    "expired": {
+      "id": "user-004",
+      "name": "Expired Account",
+      "email": "expired@example.com",
+      "password": "ExpiredPass123!",
+      "status": "expired",
+      "expiryDate": "2020-01-01T00:00:00Z"
+    },
+    "premium": {
+      "id": "user-005",
+      "name": "Premium User",
+      "email": "premium@example.com",
+      "password": "PremiumPass123!",
+      "role": "user",
+      "subscription": "premium",
+      "subscriptionExpiry": "2099-12-31T23:59:59Z"
+    }
+  },
+  "socialUsers": {
+    "google": {
+      "id": "google-001",
+      "name": "Google User",
+      "email": "google-user@gmail.com",
+      "provider": "google",
+      "providerId": "google-oauth2|123456789"
+    },
+    "facebook": {
+      "id": "facebook-001",
+      "name": "Facebook User",
+      "email": "facebook-user@example.com",
+      "provider": "facebook",
+      "providerId": "facebook|987654321"
+    }
+  },
+  "invalidCredentials": [
+    {
+      "scenario": "Empty Email",
+      "email": "",
+      "password": "ValidPassword123!",
+      "expectedError": "Email is required"
+    },
+    {
+      "scenario": "Empty Password",
+      "email": "valid@example.com",
+      "password": "",
+      "expectedError": "Password is required"
+    },
+    {
+      "scenario": "Invalid Email Format",
+      "email": "not-an-email",
+      "password": "ValidPassword123!",
+      "expectedError": "Invalid email format"
+    },
+    {
+      "scenario": "Non-existent User",
+      "email": "nonexistent@example.com",
+      "password": "Password123!",
+      "expectedError": "Invalid email or password"
+    },
+    {
+      "scenario": "Wrong Password",
+      "email": "testuser@example.com",
+      "password": "WrongPassword123!",
+      "expectedError": "Invalid email or password"
+    }
+  ],
+  "registrationData": {
+    "valid": {
+      "name": "New User",
+      "email": "newuser@example.com",
+      "password": "NewUser123!",
+      "confirmPassword": "NewUser123!"
+    },
+    "invalidFormats": [
+      {
+        "scenario": "Email Already Exists",
+        "name": "Duplicate User",
+        "email": "testuser@example.com",
+        "password": "Password123!",
+        "confirmPassword": "Password123!",
+        "expectedError": "Email is already registered"
+      },
+      {
+        "scenario": "Short Password",
+        "name": "Short Password User",
+        "email": "short@example.com",
+        "password": "Short1!",
+        "confirmPassword": "Short1!",
+        "expectedError": "Password must be at least 8 characters"
+      },
+      {
+        "scenario": "Password Without Special Character",
+        "name": "No Special Char",
+        "email": "nospecial@example.com",
+        "password": "Password123",
+        "confirmPassword": "Password123",
+        "expectedError": "Password must include at least one special character"
+      },
+      {
+        "scenario": "Passwords Don't Match",
+        "name": "Mismatch User",
+        "email": "mismatch@example.com",
+        "password": "Password123!",
+        "confirmPassword": "DifferentPassword123!",
+        "expectedError": "Passwords don't match"
+      },
+      {
+        "scenario": "No Uppercase Letter",
+        "name": "No Uppercase",
+        "email": "nouppercase@example.com",
+        "password": "password123!",
+        "confirmPassword": "password123!",
+        "expectedError": "Password must include at least one uppercase letter"
+      }
+    ]
+  },
+  "resetPasswordData": {
+    "validToken": "valid-token",
+    "expiredToken": "expired-token",
+    "invalidToken": "invalid-token",
+    "newPassword": "NewSecurePassword123!"
+  }
+}

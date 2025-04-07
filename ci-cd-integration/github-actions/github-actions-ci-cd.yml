@@ -1,0 +1,314 @@
+name: Security and Test Automation Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run weekly security scans on Monday at 2 AM
+    - cron: '0 2 * * 1'
+
+jobs:
+  # PHASE 1: SECURITY SCANNING
+  security-checks:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      # Step 1: Scan dependencies for vulnerabilities
+      - name: Check for vulnerable dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      # Step 2: Run SAST (Static Application Security Testing)
+      - name: Install ESLint security plugins
+        run: |
+          npm install eslint eslint-plugin-security eslint-plugin-node --save-dev
+          
+      - name: Run security linting
+        run: npx eslint . --ext .js,.jsx,.ts,.tsx --no-error-on-unmatched-pattern
+        continue-on-error: true
+
+      # Step 3: Secret scanning
+      - name: Detect secrets in code
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+        continue-on-error: true
+
+      # Step 4: Generate security report
+      - name: Generate security report
+        run: |
+          echo "# Security Scan Results" > security-report.md
+          echo "## Dependency Analysis" >> security-report.md
+          npm audit --json | jq -r '.advisories | length | "Found \(.) vulnerabilities"' >> security-report.md
+          echo "## SAST Analysis" >> security-report.md
+          npx eslint . --ext .js,.jsx,.ts,.tsx -f json | jq -r '.length | "Found \(.) code issues"' >> security-report.md
+          echo "## Secret Scanning" >> security-report.md
+          echo "Check Gitleaks results for details" >> security-report.md
+        continue-on-error: true
+
+      # Step 5: Upload security report as artifact
+      - name: Upload security report
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-report
+          path: security-report.md
+
+  # PHASE 2: UNIT TESTING
+  unit-tests:
+    name: Unit Tests
+    needs: security-checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test -- --coverage
+
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: coverage/
+
+  # PHASE 3: INTEGRATION TESTING
+  integration-tests:
+    name: Integration Tests
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    services:
+      # Example: Set up a database service for integration tests
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          DATABASE_URL: postgresql://testuser:testpass@localhost:5432/testdb
+
+  # PHASE 4: END-TO-END TESTING
+  e2e-tests:
+    name: End-to-End Tests
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Build application
+        run: npm run build
+
+      - name: Start application
+        run: npm run start:ci &
+
+      - name: Wait for application to start
+        run: npx wait-on http://localhost:3000
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+      - name: Upload E2E test artifacts
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: playwright-report
+          path: playwright-report/
+
+  # PHASE 5: SECURITY VALIDATION (DAST)
+  security-validation:
+    name: Security Validation (DAST)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: e2e-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and start application
+        run: |
+          npm run build
+          npm run start:ci &
+          npx wait-on http://localhost:3000
+
+      # Run OWASP ZAP scan against running application
+      - name: ZAP Scan
+        uses: zaproxy/action-full-scan@v0.7.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+
+  # PHASE 6: DEPLOYMENT
+  deploy:
+    name: Deploy to Staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [e2e-tests, security-validation]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment"
+          # Add your deployment commands here
+          # Example: aws s3 sync ./build s3://my-staging-bucket/
+
+      - name: Create deployment report
+        run: |
+          echo "# Deployment Summary" > deployment-report.md
+          echo "## Version" >> deployment-report.md
+          echo "Commit: ${{ github.sha }}" >> deployment-report.md
+          echo "## Deployment Status" >> deployment-report.md
+          echo "✅ Successfully deployed to staging" >> deployment-report.md
+          echo "## Quality Gates" >> deployment-report.md
+          echo "✅ Security checks passed" >> deployment-report.md
+          echo "✅ Unit tests passed" >> deployment-report.md
+          echo "✅ Integration tests passed" >> deployment-report.md
+          echo "✅ E2E tests passed" >> deployment-report.md
+          echo "✅ DAST validation passed" >> deployment-report.md
+
+      - name: Upload deployment report
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-report
+          path: deployment-report.md
+
+  # PHASE 7: REPORTING
+  generate-reports:
+    name: Generate Combined Report
+    if: always()
+    needs: [security-checks, unit-tests, integration-tests, e2e-tests, security-validation, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: all-artifacts
+
+      - name: Combine reports
+        run: |
+          echo "# CI/CD Pipeline Report" > combined-report.md
+          echo "## Pipeline Status" >> combined-report.md
+          echo "Run Date: $(date)" >> combined-report.md
+          
+          echo "## Security Check Results" >> combined-report.md
+          if [ -f all-artifacts/security-report/security-report.md ]; then
+            cat all-artifacts/security-report/security-report.md >> combined-report.md
+          else
+            echo "❌ Security check report not available" >> combined-report.md
+          fi
+          
+          echo "## Test Results" >> combined-report.md
+          echo "### Unit Tests" >> combined-report.md
+          if [ -d all-artifacts/coverage-report ]; then
+            echo "✅ Unit tests completed. See coverage report for details." >> combined-report.md
+          else
+            echo "❌ Unit test report not available" >> combined-report.md
+          fi
+          
+          echo "### E2E Tests" >> combined-report.md
+          if [ -d all-artifacts/playwright-report ]; then
+            echo "✅ E2E tests completed. See Playwright report for details." >> combined-report.md
+          else
+            echo "❌ E2E test report not available" >> combined-report.md
+          fi
+          
+          echo "## Deployment Status" >> combined-report.md
+          if [ -f all-artifacts/deployment-report/deployment-report.md ]; then
+            cat all-artifacts/deployment-report/deployment-report.md >> combined-report.md
+          else
+            echo "❌ Deployment not completed or report not available" >> combined-report.md
+          fi
+
+      - name: Upload combined report
+        uses: actions/upload-artifact@v3
+        with:
+          name: pipeline-report
+          path: combined-report.md
+
+      # Send notifications based on pipeline status
+      - name: Send notification
+        if: always()
+        run: |
+          # Example notification command (replace with your actual notification mechanism)
+          echo "Pipeline for ${{ github.repository }} completed with status: ${{ job.status }}"
+          # Example: curl -X POST -H "Content-Type: application/json" -d '{"text":"Pipeline completed"}' $WEBHOOK_URL

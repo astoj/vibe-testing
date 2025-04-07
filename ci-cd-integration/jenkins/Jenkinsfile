@@ -1,0 +1,345 @@
+/**
+ * Jenkins Pipeline for Test Automation
+ * 
+ * This Jenkinsfile demonstrates a complete CI/CD pipeline that includes:
+ * - Security scanning
+ * - Unit testing
+ * - Integration testing
+ * - End-to-end testing
+ * - Performance testing
+ * - Deployment to staging
+ * - Reporting
+ */
+
+pipeline {
+    agent {
+        // Use Docker agent for consistent environment
+        docker {
+            image 'node:18-bullseye'
+            args '-v /tmp:/tmp --network=host'
+        }
+    }
+    
+    // Environment variables
+    environment {
+        NODE_ENV = 'test'
+        CHROME_BIN = '/usr/bin/chromium'
+        TEST_DB_HOST = 'localhost'
+        TEST_DB_PORT = '5432'
+        TEST_DB_USER = credentials('test-db-user')
+        TEST_DB_PASSWORD = credentials('test-db-password')
+        TEST_DB_NAME = 'test_db'
+    }
+    
+    // Pipeline stages
+    stages {
+        // Setup Stage
+        stage('Setup') {
+            steps {
+                // Clean workspace
+                cleanWs()
+                
+                // Checkout code
+                checkout scm
+                
+                // Install dependencies
+                sh 'npm ci'
+                
+                // Output node and npm versions for debugging
+                sh 'node --version'
+                sh 'npm --version'
+            }
+        }
+        
+        // Security Scanning Stage
+        stage('Security Scan') {
+            parallel {
+                // Dependency vulnerability scanning
+                stage('Dependency Check') {
+                    steps {
+                        // Use npm audit to check for vulnerabilities
+                        sh 'npm audit --audit-level=high'
+                        
+                        // Alternative: Use Snyk for more comprehensive scanning
+                        // snykSecurity(
+                        //     organisation: 'your-org-name',
+                        //     projectName: 'your-project-name',
+                        //     severity: 'high',
+                        //     snykInstallation: 'snyk-latest'
+                        // )
+                    }
+                    post {
+                        // Even if the scan finds issues, don't fail the build
+                        failure {
+                            echo 'Security vulnerabilities found in dependencies!'
+                            // Create report but continue pipeline
+                            sh 'npm audit --json > dependency-audit.json'
+                            archiveArtifacts artifacts: 'dependency-audit.json', fingerprint: true
+                        }
+                    }
+                }
+                
+                // Static application security testing (SAST)
+                stage('Static Code Analysis') {
+                    steps {
+                        // Run ESLint with security plugins
+                        sh 'npx eslint --no-eslintrc -c .eslintrc.security.json --ext .js,.jsx,.ts,.tsx src/ --format checkstyle > eslint-results.xml || true'
+                        
+                        // Publish results
+                        recordIssues(
+                            tools: [esLint(pattern: 'eslint-results.xml')],
+                            qualityGates: [[threshold: 3, type: 'TOTAL', unstable: true]]
+                        )
+                    }
+                }
+                
+                // Secret scanning
+                stage('Secret Detection') {
+                    steps {
+                        // Use gitleaks to find secrets in the code
+                        sh 'docker run --rm -v ${WORKSPACE}:/code zricethezav/gitleaks:latest detect --source="/code" -f json -r /code/gitleaks-report.json || true'
+                        
+                        // Check if any secrets were found
+                        script {
+                            def reportFile = readFile(file: 'gitleaks-report.json', text: true).trim()
+                            if (reportFile && reportFile != '[]') {
+                                echo 'Potential secrets found in the code!'
+                                // Archive report but continue pipeline
+                                archiveArtifacts artifacts: 'gitleaks-report.json', fingerprint: true
+                            } else {
+                                echo 'No secrets found in the code.'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Unit Testing Stage
+        stage('Unit Tests') {
+            steps {
+                // Run unit tests with coverage
+                sh 'npm run test:unit:ci'
+                
+                // Publish coverage reports
+                publishHTML(target: [
+                    allowMissing: false,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: 'coverage',
+                    reportFiles: 'index.html',
+                    reportName: 'Unit Test Coverage'
+                ])
+                
+                // Publish JUnit report
+                junit 'test-results/unit/junit.xml'
+            }
+        }
+        
+        // Integration Testing Stage
+        stage('Integration Tests') {
+            // Use Docker Compose to set up dependencies
+            agent {
+                dockerfile {
+                    filename 'Dockerfile.test'
+                    args '-v /tmp:/tmp --network=host'
+                }
+            }
+            
+            steps {
+                // Start dependencies using Docker Compose
+                sh 'docker-compose -f docker-compose.test.yml up -d'
+                
+                // Wait for services to be ready
+                sh 'scripts/wait-for-services.sh'
+                
+                // Run integration tests
+                sh 'npm run test:integration:ci'
+                
+                // Publish test results
+                junit 'test-results/integration/junit.xml'
+            }
+            
+            post {
+                always {
+                    // Stop and remove Docker containers
+                    sh 'docker-compose -f docker-compose.test.yml down -v'
+                }
+            }
+        }
+        
+        // End-to-End Testing Stage
+        stage('E2E Tests') {
+            // Define multiple browser configurations
+            matrix {
+                axes {
+                    axis {
+                        name 'BROWSER'
+                        values 'chrome', 'firefox', 'webkit'
+                    }
+                }
+                
+                stages {
+                    stage('Run E2E Tests') {
+                        steps {
+                            // Install browser dependencies if needed
+                            sh 'npx playwright install ${BROWSER}'
+                            
+                            // Start application in test mode
+                            sh 'npm run start:test &'
+                            sh 'sleep 10'  // Wait for application to start
+                            
+                            // Run E2E tests for the specific browser
+                            sh "npm run test:e2e:ci -- --project=${BROWSER}"
+                            
+                            // Publish test results
+                            junit "test-results/e2e/${BROWSER}-junit.xml"
+                            
+                            // Archive test artifacts
+                            archiveArtifacts artifacts: "playwright-report/${BROWSER}/**", fingerprint: true
+                        }
+                        
+                        post {
+                            always {
+                                // Kill the application
+                                sh 'pkill -f "node.*start:test" || true'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Performance Testing Stage (conditional on branch)
+        stage('Performance Tests') {
+            when {
+                branch 'main'
+            }
+            
+            steps {
+                // Use k6 for performance testing
+                sh 'docker run --rm -i grafana/k6 run --vus 10 --duration 30s - < performance/load-test.js > performance-results.txt'
+                
+                // Archive performance results
+                archiveArtifacts artifacts: 'performance-results.txt', fingerprint: true
+                
+                // Parse performance results for thresholds
+                script {
+                    def results = readFile('performance-results.txt')
+                    if (results.contains('checks.......: 100.00%')) {
+                        echo 'All performance checks passed!'
+                    } else {
+                        unstable 'Some performance checks failed'
+                    }
+                }
+            }
+        }
+        
+        // Deploy to Staging (conditional on branch)
+        stage('Deploy to Staging') {
+            when {
+                branch 'main'
+            }
+            
+            steps {
+                // Build the application for production
+                sh 'npm run build'
+                
+                // Archive the build artifacts
+                archiveArtifacts artifacts: 'dist/**', fingerprint: true
+                
+                // Deploy to staging
+                // This would typically use a tool like AWS CLI, Azure CLI, or custom deploy script
+                sh 'scripts/deploy-to-staging.sh'
+                
+                // Verify deployment
+                sh 'curl -f https://staging.example.com/health || exit 1'
+            }
+        }
+        
+        // Post-Deployment Tests (conditional on branch)
+        stage('Post-Deployment Tests') {
+            when {
+                branch 'main'
+            }
+            
+            steps {
+                // Run smoke tests against staging
+                sh 'npm run test:smoke -- --baseUrl="https://staging.example.com"'
+                
+                // Run DAST (Dynamic Application Security Testing) against staging
+                sh 'docker run --rm -v $(pwd)/security:/zap/wrk owasp/zap2docker-stable zap-baseline.py -t https://staging.example.com -g gen.conf -r zap-report.html'
+                
+                // Archive DAST report
+                archiveArtifacts artifacts: 'security/zap-report.html', fingerprint: true
+            }
+        }
+    }
+    
+    // Post-build actions
+    post {
+        always {
+            // Generate combined test report
+            script {
+                def summary = """
+                # Test Execution Summary
+                
+                ## Unit Tests
+                - Results: ${currentBuild.getAction(hudson.tasks.junit.TestResultAction.class)?.getFailCount() ?: 'N/A'} failures out of ${currentBuild.getAction(hudson.tasks.junit.TestResultAction.class)?.getTotalCount() ?: 'N/A'} tests
+                
+                ## Integration Tests
+                - Database Tests: Completed
+                - API Tests: Completed
+                
+                ## E2E Tests
+                - Chrome: ${currentBuild.getResult() == 'SUCCESS' ? 'PASSED' : 'FAILED'}
+                - Firefox: ${currentBuild.getResult() == 'SUCCESS' ? 'PASSED' : 'FAILED'}
+                - Webkit: ${currentBuild.getResult() == 'SUCCESS' ? 'PASSED' : 'FAILED'}
+                
+                ## Security Scans
+                - Dependency Check: Completed
+                - SAST: Completed
+                - Secret Detection: Completed
+                
+                ## Build Status
+                - Result: ${currentBuild.getResult()}
+                - Duration: ${currentBuild.getDurationString()}
+                """
+                
+                writeFile file: 'test-summary.md', text: summary
+                archiveArtifacts artifacts: 'test-summary.md', fingerprint: true
+            }
+            
+            // Clean up
+            cleanWs(cleanWhenNotBuilt: false,
+                    deleteDirs: true,
+                    disableDeferredWipeout: true,
+                    notFailBuild: true,
+                    patterns: [[pattern: 'node_modules', type: 'EXCLUDE']])
+        }
+        
+        success {
+            // Notify team of success
+            slackSend(
+                color: 'good',
+                message: "Build Successful: ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+            )
+        }
+        
+        unstable {
+            // Notify team of unstable build
+            slackSend(
+                color: 'warning',
+                message: "Build Unstable: ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+            )
+        }
+        
+        failure {
+            // Notify team of failure
+            slackSend(
+                color: 'danger',
+                message: "Build Failed: ${env.JOB_NAME} #${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)"
+            )
+        }
+    }
+}

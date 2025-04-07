@@ -1,0 +1,404 @@
+# GitLab CI/CD Configuration
+# 
+# This CI/CD pipeline includes stages for:
+# - Security scanning
+# - Unit testing
+# - Integration testing
+# - End-to-end testing
+# - Performance testing
+# - Deployment
+# - Post-deployment validation
+
+# Define stages in order of execution
+stages:
+  - setup
+  - security
+  - unit-test
+  - integration-test
+  - e2e-test
+  - performance
+  - deploy
+  - post-deploy
+
+# Default image for all jobs
+image: node:18-bullseye
+
+# Cache dependencies between jobs
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+    - .npm/
+
+# Global variables
+variables:
+  NODE_ENV: "test"
+  # Avoid installing Playwright browsers during npm install
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+  # Configure test database
+  TEST_DB_HOST: "postgres"
+  TEST_DB_PORT: "5432"
+  TEST_DB_USER: "test_user"
+  TEST_DB_PASSWORD: "test_password"
+  TEST_DB_NAME: "test_db"
+  # Docker image registry
+  DOCKER_REGISTRY: "${CI_REGISTRY}"
+  # Application settings
+  APP_IMAGE_NAME: "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+  STAGING_URL: "https://staging.example.com"
+  PRODUCTION_URL: "https://example.com"
+
+# Setup job
+setup:
+  stage: setup
+  script:
+    - npm ci
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+      - package.json
+      - package-lock.json
+
+# =========== Security Stage ===========
+
+# Dependency scanning
+dependency-scan:
+  stage: security
+  script:
+    - npm audit --audit-level=high --json > npm-audit.json || true
+    - |
+      if grep -q '"vulnerabilities":' npm-audit.json && ! grep -q '"vulnerabilities": {}' npm-audit.json; then
+        echo "Security vulnerabilities found!"
+        jq '.vulnerabilities' npm-audit.json
+        exit 0 # Don't fail the pipeline, but notify
+      else
+        echo "No major vulnerabilities found in dependencies"
+      fi
+  artifacts:
+    paths:
+      - npm-audit.json
+    expire_in: 1 week
+  allow_failure: true
+
+# Static Application Security Testing (SAST)
+sast:
+  stage: security
+  script:
+    - npm install -g eslint eslint-plugin-security
+    - npx eslint --no-eslintrc --config .eslintrc.security.json --ext .js,.jsx,.ts,.tsx src/
+  artifacts:
+    reports:
+      sast: gl-sast-report.json
+  allow_failure: true
+
+# Secret scanning
+secret-detection:
+  stage: security
+  image: registry.gitlab.com/gitlab-org/security-products/secret-detection:latest
+  script:
+    - /analyzer run
+  artifacts:
+    reports:
+      secret_detection: gl-secret-detection-report.json
+  allow_failure: true
+
+# =========== Testing Stages ===========
+
+# Unit tests
+unit-tests:
+  stage: unit-test
+  script:
+    - npm run test:unit:ci
+  artifacts:
+    paths:
+      - coverage/
+      - test-results/unit/
+    reports:
+      junit: test-results/unit/junit.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+  coverage: '/Statements\s+:\s+(\d+.?\d*)%/'
+
+# Integration tests
+integration-tests:
+  stage: integration-test
+  services:
+    - name: postgres:14-alpine
+      alias: postgres
+      variables:
+        POSTGRES_DB: "test_db"
+        POSTGRES_USER: "test_user"
+        POSTGRES_PASSWORD: "test_password"
+    - name: redis:alpine
+      alias: redis
+  script:
+    - npm run db:migrate
+    - npm run test:integration:ci
+  artifacts:
+    paths:
+      - test-results/integration/
+    reports:
+      junit: test-results/integration/junit.xml
+
+# API tests with Postman/Newman
+api-tests:
+  stage: integration-test
+  image: 
+    name: postman/newman:alpine
+    entrypoint: [""]
+  script:
+    - newman run ./tests/api/api-collection.json -e ./tests/api/environment.json --reporters cli,junit --reporter-junit-export test-results/api/junit.xml
+  artifacts:
+    paths:
+      - test-results/api/
+    reports:
+      junit: test-results/api/junit.xml
+  allow_failure: true
+
+# End-to-End tests - Chrome
+e2e-chrome:
+  stage: e2e-test
+  image: mcr.microsoft.com/playwright:v1.34.0-focal
+  variables:
+    BROWSER: "chromium"
+  before_script:
+    - npm ci
+    - npx playwright install ${BROWSER}
+    - npm run build
+  script:
+    - mkdir -p test-results/e2e
+    # Start the server
+    - nohup npm run start:test > server.log 2>&1 &
+    - sleep 10 # Wait for server to start
+    # Run Playwright tests
+    - npx playwright test --project=${BROWSER} --reporter=junit,html
+    - cp test-results/junit.xml test-results/e2e/${BROWSER}-junit.xml
+  artifacts:
+    paths:
+      - playwright-report/
+      - test-results/e2e/
+      - server.log
+    reports:
+      junit: test-results/e2e/${BROWSER}-junit.xml
+  allow_failure: true
+
+# End-to-End tests - Firefox
+e2e-firefox:
+  stage: e2e-test
+  image: mcr.microsoft.com/playwright:v1.34.0-focal
+  variables:
+    BROWSER: "firefox"
+  before_script:
+    - npm ci
+    - npx playwright install ${BROWSER}
+    - npm run build
+  script:
+    - mkdir -p test-results/e2e
+    # Start the server
+    - nohup npm run start:test > server.log 2>&1 &
+    - sleep 10 # Wait for server to start
+    # Run Playwright tests
+    - npx playwright test --project=${BROWSER} --reporter=junit,html
+    - cp test-results/junit.xml test-results/e2e/${BROWSER}-junit.xml
+  artifacts:
+    paths:
+      - playwright-report/
+      - test-results/e2e/
+      - server.log
+    reports:
+      junit: test-results/e2e/${BROWSER}-junit.xml
+  allow_failure: true
+
+# =========== Performance Testing ===========
+
+# Performance tests with k6
+performance-tests:
+  stage: performance
+  image: loadimpact/k6:latest
+  script:
+    - k6 run performance/load-test.js --summary-export=k6-summary.json
+  artifacts:
+    paths:
+      - k6-summary.json
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - when: manual
+
+# =========== Deployment Stages ===========
+
+# Build and push Docker image
+build-docker:
+  stage: deploy
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - docker build -t $APP_IMAGE_NAME .
+    - docker push $APP_IMAGE_NAME
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_BRANCH =~ /^release\/.*$/
+
+# Deploy to staging
+deploy-staging:
+  stage: deploy
+  image: 
+    name: alpine/k8s:1.24.12
+    entrypoint: [""]
+  variables:
+    KUBE_NAMESPACE: "staging"
+  before_script:
+    # Set up Kubernetes configuration
+    - echo "$KUBE_CONFIG" | base64 -d > kubeconfig.yaml
+    - export KUBECONFIG=kubeconfig.yaml
+  script:
+    # Update the deployment to use the new image
+    - |
+      cat > deployment-patch.yaml <<EOF
+      spec:
+        template:
+          spec:
+            containers:
+            - name: app
+              image: $APP_IMAGE_NAME
+      EOF
+    # Apply the patch
+    - kubectl -n $KUBE_NAMESPACE patch deployment app -p "$(cat deployment-patch.yaml)"
+    # Wait for rollout to complete
+    - kubectl -n $KUBE_NAMESPACE rollout status deployment/app --timeout=300s
+  environment:
+    name: staging
+    url: $STAGING_URL
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# =========== Post-Deployment Validation ===========
+
+# Smoke tests against staging
+smoke-tests:
+  stage: post-deploy
+  image: mcr.microsoft.com/playwright:v1.34.0-focal
+  variables:
+    BASE_URL: $STAGING_URL
+  before_script:
+    - npm ci
+    - npx playwright install chromium
+  script:
+    - npm run test:smoke -- --base-url=$BASE_URL
+  artifacts:
+    paths:
+      - test-results/smoke/
+    reports:
+      junit: test-results/smoke/junit.xml
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# Security scanning against staging
+dast:
+  stage: post-deploy
+  image: 
+    name: owasp/zap2docker-stable
+    entrypoint: [""]
+  variables:
+    TARGET_URL: $STAGING_URL
+  script:
+    - mkdir -p security-reports
+    - zap-baseline.py -t $TARGET_URL -g gen.conf -r security-reports/zap-report.html || true
+  artifacts:
+    paths:
+      - security-reports/
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  allow_failure: true
+
+# Deploy to production (manual trigger)
+deploy-production:
+  stage: deploy
+  image: 
+    name: alpine/k8s:1.24.12
+    entrypoint: [""]
+  variables:
+    KUBE_NAMESPACE: "production"
+  before_script:
+    # Set up Kubernetes configuration
+    - echo "$KUBE_CONFIG" | base64 -d > kubeconfig.yaml
+    - export KUBECONFIG=kubeconfig.yaml
+  script:
+    # Update the deployment to use the new image
+    - |
+      cat > deployment-patch.yaml <<EOF
+      spec:
+        template:
+          spec:
+            containers:
+            - name: app
+              image: $APP_IMAGE_NAME
+      EOF
+    # Apply the patch
+    - kubectl -n $KUBE_NAMESPACE patch deployment app -p "$(cat deployment-patch.yaml)"
+    # Wait for rollout to complete
+    - kubectl -n $KUBE_NAMESPACE rollout status deployment/app --timeout=300s
+  environment:
+    name: production
+    url: $PRODUCTION_URL
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+  needs:
+    - job: deploy-staging
+      artifacts: false
+    - job: smoke-tests
+      artifacts: false
+
+# =========== Scheduled Jobs ===========
+
+# Nightly full test suite
+nightly-tests:
+  stage: integration-test
+  script:
+    - npm ci
+    - npm run test:all
+  artifacts:
+    paths:
+      - test-results/
+    reports:
+      junit: test-results/**/junit.xml
+  only:
+    - schedules
+
+# Weekly dependency updates
+dependency-updates:
+  stage: setup
+  script:
+    - npm install -g npm-check-updates
+    - ncu > dependency-updates.txt
+    - ncu -u
+    - npm install
+    - npm test || true
+    - |
+      if [ $? -eq 0 ]; then
+        echo "Tests pass with updated dependencies"
+        git config --global user.email "gitlab-ci@example.com"
+        git config --global user.name "GitLab CI"
+        git checkout -b dependency-update-$(date +%Y-%m-%d)
+        git add package.json package-lock.json
+        git commit -m "Update dependencies [skip ci]"
+        git push origin dependency-update-$(date +%Y-%m-%d)
+        echo "Created dependency update branch"
+      else
+        echo "Tests failed with updated dependencies"
+      fi
+  artifacts:
+    paths:
+      - dependency-updates.txt
+  only:
+    - schedules
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_TYPE == "dependency-update"

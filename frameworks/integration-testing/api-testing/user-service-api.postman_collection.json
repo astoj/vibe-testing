@@ -1,0 +1,423 @@
+{
+  "info": {
+    "_postman_id": "72f52a8a-0a5b-4c4e-b5e3-7465a7851f2e",
+    "name": "User Service API Tests",
+    "description": "A collection of API tests for the User Service, covering authentication, registration, and profile management endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.example.com",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login - Valid Credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test successful login response",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains auth token\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.token).to.exist;",
+                  "    pm.expect(jsonData.token).to.be.a('string');",
+                  "    pm.expect(jsonData.token.length).to.be.greaterThan(10);",
+                  "",
+                  "    // Save token for subsequent requests",
+                  "    pm.collectionVariables.set(\"authToken\", jsonData.token);",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains user data\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.user).to.exist;",
+                  "    pm.expect(jsonData.user.id).to.exist;",
+                  "    pm.expect(jsonData.user.email).to.equal(pm.variables.get(\"userEmail\"));",
+                  "    pm.expect(jsonData.user.name).to.exist;",
+                  "});",
+                  "",
+                  "pm.test(\"Response time is acceptable\", function () {",
+                  "    pm.expect(pm.response.responseTime).to.be.below(500);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Store test user credentials as variables",
+                  "pm.variables.set(\"userEmail\", \"testuser@example.com\");",
+                  "pm.variables.set(\"userPassword\", \"Password123!\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{userEmail}}\",\n    \"password\": \"{{userPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Tests login with valid credentials"
+          },
+          "response": []
+        },
+        {
+          "name": "Login - Invalid Credentials",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test invalid login response",
+                  "pm.test(\"Status code is 401\", function () {",
+                  "    pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains error message\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.error).to.exist;",
+                  "    pm.expect(jsonData.error).to.contain(\"Invalid email or password\");",
+                  "});",
+                  "",
+                  "pm.test(\"Response does not contain auth token\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.token).to.not.exist;",
+                  "});",
+                  "",
+                  "pm.test(\"Response time is acceptable\", function () {",
+                  "    // Response time should be similar to valid login to prevent timing attacks",
+                  "    pm.expect(pm.response.responseTime).to.be.below(500);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Invalid credentials",
+                  "pm.variables.set(\"userEmail\", \"testuser@example.com\");",
+                  "pm.variables.set(\"userPassword\", \"WrongPassword123!\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{userEmail}}\",\n    \"password\": \"{{userPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Tests login with invalid credentials"
+          },
+          "response": []
+        },
+        {
+          "name": "Logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test successful logout",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response indicates successful logout\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.message).to.exist;",
+                  "    pm.expect(jsonData.message).to.contain(\"Successfully logged out\");",
+                  "});",
+                  "",
+                  "// Clear the auth token",
+                  "pm.collectionVariables.set(\"authToken\", \"\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Tests user logout"
+          },
+          "response": []
+        },
+        {
+          "name": "Request Password Reset",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test password reset request",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response indicates reset email sent\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.message).to.exist;",
+                  "    pm.expect(jsonData.message).to.contain(\"Reset instructions sent\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.variables.set(\"userEmail\", \"testuser@example.com\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{userEmail}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            },
+            "description": "Tests requesting a password reset"
+          },
+          "response": []
+        },
+        {
+          "name": "Complete Password Reset",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test completing password reset",
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Response indicates password reset success\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.message).to.exist;",
+                  "    pm.expect(jsonData.message).to.contain(\"Password successfully reset\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// In a real scenario, this token would be obtained from an email or database",
+                  "pm.variables.set(\"resetToken\", \"valid-reset-token-123\");",
+                  "pm.variables.set(\"newPassword\", \"NewPassword456!\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"token\": \"{{resetToken}}\",\n    \"password\": \"{{newPassword}}\",\n    \"confirmPassword\": \"{{newPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password",
+                "confirm"
+              ]
+            },
+            "description": "Tests completing a password reset with a valid token"
+          },
+          "response": []
+        }
+      ],
+      "description": "Tests for authentication endpoints including login, logout, and password reset."
+    },
+    {
+      "name": "User Registration",
+      "item": [
+        {
+          "name": "Register New User",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test successful user registration",
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains user data\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.user).to.exist;",
+                  "    pm.expect(jsonData.user.id).to.exist;",
+                  "    pm.expect(jsonData.user.email).to.equal(pm.variables.get(\"newUserEmail\"));",
+                  "    pm.expect(jsonData.user.name).to.equal(pm.variables.get(\"newUserName\"));",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains auth token\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.token).to.exist;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Generate a unique email to avoid conflicts",
+                  "const timestamp = new Date().getTime();",
+                  "pm.variables.set(\"newUserEmail\", `newuser.${timestamp}@example.com`);",
+                  "pm.variables.set(\"newUserName\", \"New Test User\");",
+                  "pm.variables.set(\"newUserPassword\", \"SecurePassword123!\");"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"{{newUserEmail}}\",\n    \"name\": \"{{newUserName}}\",\n    \"password\": \"{{newUserPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "register"
+              ]
+            },
+            "description": "Tests registering a new user account"
+          },
+          "response": []
+        },
+        {
+          "name": "Register - Email Already Exists",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Test registration with existing email",
+                  "pm.test(\"Status code is 409 Conflict\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "",
+                  "pm.test(\"Response contains appropriate error message\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.error).to.exist;",
+                  "    pm.expect(jsonData.error).to.contain(\"Email already exists\");",
+                  "});"
+                
